@@ -1,39 +1,27 @@
-# ==========================================
-# frontend_api.py
-# Frontend REST API for GoodBooks MCP Tools
-# Run:
-# uvicorn frontend_api:app --reload --port 9000
-# ==========================================
+import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastmcp import Client
 from chat_router import route_query
 
-# MOCK SERVICES
-from mock_service.mock_hrms import (
-    apply_leave,
-    leave_balance,
-    attendance_summary
+APP_MCP_URL = os.getenv(
+    "APP_MCP_URL",
+    "http://127.0.0.1:8007/mcp"
 )
 
-from mock_service.mock_procurement import (
-    create_purchase_order
-)
 
-from mock_service.mock_finance import (
-    ledger_balance,
-    invoice_status,
-    expense_claim
-)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.mcp_client = Client(APP_MCP_URL)
+    yield
 
-from mock_service.mock_inventory import (
-    stock_check,
-    low_stock_items
-)
 
 app = FastAPI(
     title="GoodBooks Frontend API",
-    version="1.0"
+    version="1.0",
+    lifespan=lifespan
 )
 
 # ==========================================
@@ -61,7 +49,7 @@ def root():
     }
 
 @app.post("/chat")
-def chat(payload: dict):
+async def chat(payload: dict):
 
     user_msg = payload["message"]
 
@@ -70,41 +58,46 @@ def chat(payload: dict):
     tool = route["tool"]
     args = route["arguments"]
 
-    if tool == "leave_balance_tool":
-        return leave_balance()
+    if tool is None:
+        return {
+            "status": "error",
+            "message": route["message"]
+        }
 
-    elif tool == "apply_leave_tool":
-        return apply_leave(args)
+    try:
+        client = app.state.mcp_client
 
-    elif tool == "attendance_summary_tool":
-        return attendance_summary()
+        async with client:
+            result = await client.call_tool(tool, args)
 
-    elif tool == "create_purchase_order_tool":
-        return create_purchase_order(args)
+        if result.is_error:
+            return {
+                "status": "error",
+                "message": "Tool execution failed",
+                "tool": tool
+            }
 
-    elif tool == "ledger_balance_tool":
-        return ledger_balance(args["ledger_id"])
+        if result.data is not None:
+            return result.data
 
-    elif tool == "invoice_status_tool":
-        return invoice_status(args["invoice_no"])
+        if result.structured_content is not None:
+            return result.structured_content
 
-    elif tool == "stock_check_tool":
-        return stock_check(args["item_id"])
+        if result.content:
+            first = result.content[0]
+            return {
+                "status": "success",
+                "message": getattr(first, "text", str(first))
+            }
 
-    elif tool == "low_stock_items_tool":
-        return low_stock_items()
+        return {
+            "status": "success",
+            "tool": tool
+        }
 
-    elif tool == "expense_claim_tool":
-        return expense_claim(
-            args["claim_type"],
-            args["amount"],
-            args["remarks"]
-        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
-    return {
-        "status": "error",
-        "message": "No tool matched"
-    }
 # ==========================================
 # TOOL LIST
 # ==========================================
@@ -120,7 +113,9 @@ def tools():
             "create_purchase_order",
             "ledger_balance",
             "invoice_status",
-            "stock_check"
+            "stock_check",
+            "low_stock_items",
+            "expense_claim"
         ]
     }
 
@@ -130,29 +125,38 @@ def tools():
 # ==========================================
 
 @app.post("/apply-leave")
-def api_apply_leave(payload: dict):
+async def api_apply_leave(payload: dict):
 
     try:
-        return apply_leave({
-            "leave_type": payload["leave_type"],
-            "leave_date": payload["leave_date"],
-            "reason": payload.get("reason", "")
-        })
+        async with app.state.mcp_client as client:
+            result = await client.call_tool(
+                "apply_leave_tool",
+                {
+                    "leave_type": payload["leave_type"],
+                    "leave_date": payload["leave_date"],
+                    "reason": payload.get("reason", "")
+                }
+            )
+        return result.data or result.structured_content or {}
 
     except Exception as e:
         raise HTTPException(500, str(e))
 
 
 @app.get("/leave-balance")
-def api_leave_balance():
+async def api_leave_balance():
 
-    return leave_balance()
+    async with app.state.mcp_client as client:
+        result = await client.call_tool("leave_balance_tool", {})
+    return result.data or result.structured_content or {}
 
 
 @app.get("/attendance-summary")
-def api_attendance():
+async def api_attendance():
 
-    return attendance_summary()
+    async with app.state.mcp_client as client:
+        result = await client.call_tool("attendance_summary_tool", {})
+    return result.data or result.structured_content or {}
 
 
 # ==========================================
@@ -160,15 +164,20 @@ def api_attendance():
 # ==========================================
 
 @app.post("/create-po")
-def api_create_po(payload: dict):
+async def api_create_po(payload: dict):
 
     try:
-        return create_purchase_order({
-            "vendor_id": payload["vendor_id"],
-            "item_id": payload["item_id"],
-            "quantity": payload["quantity"],
-            "unit_price": payload["unit_price"]
-        })
+        async with app.state.mcp_client as client:
+            result = await client.call_tool(
+                "create_purchase_order_tool",
+                {
+                    "vendor_id": payload["vendor_id"],
+                    "item_id": payload["item_id"],
+                    "quantity": payload["quantity"],
+                    "unit_price": payload["unit_price"]
+                }
+            )
+        return result.data or result.structured_content or {}
 
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -179,15 +188,19 @@ def api_create_po(payload: dict):
 # ==========================================
 
 @app.get("/ledger-balance/{ledger_id}")
-def api_ledger_balance(ledger_id: str):
+async def api_ledger_balance(ledger_id: str):
 
-    return ledger_balance(ledger_id)
+    async with app.state.mcp_client as client:
+        result = await client.call_tool("ledger_balance_tool", {"ledger_id": ledger_id})
+    return result.data or result.structured_content or {}
 
 
 @app.get("/invoice-status/{invoice_no}")
-def api_invoice_status(invoice_no: str):
+async def api_invoice_status(invoice_no: str):
 
-    return invoice_status(invoice_no)
+    async with app.state.mcp_client as client:
+        result = await client.call_tool("invoice_status_tool", {"invoice_no": invoice_no})
+    return result.data or result.structured_content or {}
 
 
 # ==========================================
@@ -195,6 +208,8 @@ def api_invoice_status(invoice_no: str):
 # ==========================================
 
 @app.get("/stock-check/{item_id}")
-def api_stock_check(item_id: str):
+async def api_stock_check(item_id: str):
 
-    return stock_check(item_id)
+    async with app.state.mcp_client as client:
+        result = await client.call_tool("stock_check_tool", {"item_id": item_id})
+    return result.data or result.structured_content or {}

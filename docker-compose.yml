@@ -1,9 +1,22 @@
 services:
-  goodbooks:
+  app-service:
     build:
       context: .
       dockerfile: Dockerfile
+    command: ["python", "app.py"]
     ports:
       - "8007:8007"
-      - "8009:8009"
+    restart: unless-stopped
+
+  frontend-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "frontend_ai:app", "--host", "0.0.0.0", "--port", "9000"]
+    environment:
+      APP_MCP_URL: http://app-service:8007/mcp
+    depends_on:
+      - app-service
+    ports:
+      - "9000:9000"
     restart: unless-stopped

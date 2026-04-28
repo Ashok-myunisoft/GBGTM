@@ -12,10 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code.
 COPY . .
 
-# Expose both application ports.
-EXPOSE 8007 8009
+# Expose the frontend port.
+EXPOSE 9000
 
-# Run both servers in the same container:
-# - app.py on 8007
-# - main.py on 8009
-CMD ["sh", "-c", "python app.py & python main.py & wait"]
+# Run the frontend API in this container.
+CMD ["uvicorn", "frontend_ai:app", "--host", "0.0.0.0", "--port", "9000"]
