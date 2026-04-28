@@ -1,5 +1,6 @@
 import os
 from contextlib import asynccontextmanager
+from pydantic import BaseModel, Field
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +24,23 @@ app = FastAPI(
     version="1.0",
     lifespan=lifespan
 )
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., examples=["I need leave tomorrow because fever"])
+
+
+class ApplyLeaveRequest(BaseModel):
+    leave_type: str = Field(..., examples=["Casual Leave"])
+    leave_date: str = Field(..., examples=["2026-04-29"])
+    reason: str = Field("", examples=["Fever"])
+
+
+class CreatePORequest(BaseModel):
+    vendor_id: str = Field(..., examples=["V001"])
+    item_id: str = Field(..., examples=["I001"])
+    quantity: float = Field(..., examples=[10])
+    unit_price: float = Field(..., examples=[2500])
 
 # ==========================================
 # CORS
@@ -49,9 +67,9 @@ def root():
     }
 
 @app.post("/chat")
-async def chat(payload: dict):
+async def chat(payload: ChatRequest):
 
-    user_msg = payload["message"]
+    user_msg = payload.message
 
     route = route_query(user_msg)
 
@@ -125,16 +143,16 @@ def tools():
 # ==========================================
 
 @app.post("/apply-leave")
-async def api_apply_leave(payload: dict):
+async def api_apply_leave(payload: ApplyLeaveRequest):
 
     try:
         async with app.state.mcp_client as client:
             result = await client.call_tool(
                 "apply_leave_tool",
                 {
-                    "leave_type": payload["leave_type"],
-                    "leave_date": payload["leave_date"],
-                    "reason": payload.get("reason", "")
+                    "leave_type": payload.leave_type,
+                    "leave_date": payload.leave_date,
+                    "reason": payload.reason
                 }
             )
         return result.data or result.structured_content or {}
@@ -164,17 +182,17 @@ async def api_attendance():
 # ==========================================
 
 @app.post("/create-po")
-async def api_create_po(payload: dict):
+async def api_create_po(payload: CreatePORequest):
 
     try:
         async with app.state.mcp_client as client:
             result = await client.call_tool(
                 "create_purchase_order_tool",
                 {
-                    "vendor_id": payload["vendor_id"],
-                    "item_id": payload["item_id"],
-                    "quantity": payload["quantity"],
-                    "unit_price": payload["unit_price"]
+                    "vendor_id": payload.vendor_id,
+                    "item_id": payload.item_id,
+                    "quantity": payload.quantity,
+                    "unit_price": payload.unit_price
                 }
             )
         return result.data or result.structured_content or {}
